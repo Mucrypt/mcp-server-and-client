@@ -1,0 +1,193 @@
+version: '3.8'
+
+services:
+  # Redis for caching and coordination
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # Agent Services
+  market-structure:
+    build: .
+    command: node dist/services/market-structure-service.js
+    ports:
+      - "5001:5001"
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  order-flow:
+    build: .
+    command: node dist/services/order-flow-service.js
+    ports:
+      - "5002:5002"
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  momentum:
+    build: .
+    command: node dist/services/momentum-service.js
+    ports:
+      - "5003:5003"
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  volatility-regime:
+    build: .
+    command: node dist/services/volatility-regime-service.js
+    ports:
+      - "5004:5004"
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  news-sentiment:
+    build: .
+    command: node dist/services/news-sentiment-service.js
+    ports:
+      - "5005:5005"
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - CRYPTO_NEWS_API_URL=${CRYPTO_NEWS_API_URL}
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  multi-timeframe:
+    build: .
+    command: node dist/services/multi-timeframe-service.js
+    ports:
+      - "5006:5006"
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  pattern-recognition:
+    build: .
+    command: node dist/services/pattern-recognition-service.js
+    ports:
+      - "5007:5007"
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  statistical-edge:
+    build: .
+    command: node dist/services/statistical-edge-service.js
+    ports:
+      - "5008:5008"
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  risk-manager:
+    build: .
+    command: node dist/services/risk-manager-service.js
+    ports:
+      - "5009:5009"
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Pipeline Orchestrator + HTTP API
+  orchestrator:
+    build: .
+    command: node dist/server.js
+    ports:
+      - "4000:4000"
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - TEST_ACCOUNT_ID=${TEST_ACCOUNT_ID}
+      - AGENT_MODE=pipeline
+      - USE_HTTP_AGENTS=true
+      - AGENT_SERVICES_BASE_URL=http://host.docker.internal
+      - MCP_SERVER_ENABLED=false
+    depends_on:
+      - redis
+      - market-structure
+      - order-flow
+      - momentum
+      - volatility-regime
+      - news-sentiment
+      - multi-timeframe
+      - pattern-recognition
+      - statistical-edge
+      - risk-manager
+    restart: unless-stopped
+
+  # Optional: Scheduler (uncomment to enable)
+  # scheduler:
+  #   build: .
+  #   command: node dist/pipeline/scheduler.js
+  #   environment:
+  #     - REDIS_URL=redis://redis:6379
+  #     - SUPABASE_URL=${SUPABASE_URL}
+  #     - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+  #     - TEST_ACCOUNT_ID=${TEST_ACCOUNT_ID}
+  #     - PIPELINE_SYMBOL=BTCUSDT
+  #     - PIPELINE_TIMEFRAME=1h
+  #     - PIPELINE_INTERVAL_MS=3600000
+  #     - USE_HTTP_AGENTS=true
+  #     - AGENT_SERVICES_BASE_URL=http://host.docker.internal
+  #   depends_on:
+  #     - orchestrator
+  #   restart: unless-stopped
+
+volumes:
+  redis-data:

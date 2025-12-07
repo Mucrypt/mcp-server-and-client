@@ -1,0 +1,32 @@
+version: "3.9"
+
+services:
+  ai-trading-api:
+    build: .
+    container_name: ai-trading-api
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Override Redis URL to match docker service name
+      REDIS_URL: redis://redis:6379
+      # Supabase + keys already come from .env
+    depends_on:
+      - redis
+    # Optional: expose MCP over stdio via some wrapper – usually MCP clients
+    # talk over stdio, so no port. But if you add REST later, expose it here:
+    # ports:
+    #   - "3000:3000"
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: ["redis-server", "--appendonly", "yes"]
+
+volumes:
+  redis-data:

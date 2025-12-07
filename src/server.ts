@@ -1,216 +1,278 @@
+import "dotenv/config";
 import {
   McpServer,
-  ResourceTemplate,
-} from "@modelcontextprotocol/sdk/server/mcp.js"
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
-import { z } from "zod"
-import fs from "node:fs/promises"
-import { CreateMessageResultSchema } from "@modelcontextprotocol/sdk/types.js"
+} from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { z } from "zod";
+import { supabase } from "./core/supabase";
+import { syncAgentRegistry } from "./core/agentRegistry";
+import { recordAgentSignal } from "./core/agentBus";
+import { AgentRunResult } from "./core/agentBase";
+
+// Agents
+import { MarketStructureAgent } from "./agents/marketStructureAgent";
+import { OrderFlowAgent } from "./agents/orderFlowAgent";
+import { MomentumAgent } from "./agents/momentumAgent";
+import { VolatilityRegimeAgent } from "./agents/volatilityRegimeAgent";
+import { NewsSentimentAgent } from "./agents/newsSentimentAgent";
+import { MultiTimeframeAgent } from "./agents/multiTimeframeAgent";
+import { PatternRecognitionAgent } from "./agents/patternRecognitionAgent";
+import { StatisticalEdgeAgent } from "./agents/statisticalEdgeAgent";
+import { RiskManagerAgent } from "./agents/riskManagerAgent";
+import { DecisionAgent } from "./agents/decisionAgent";
+import { ExecutionAgent } from "./execution/executionAgent";
+import { startHttpServer } from "./api/httpServer";
+
+// Pipeline mode imports
+import { runPipelineOnce } from "./pipeline/pipeline_orchestrator.js";
+
 
 const server = new McpServer({
-  name: "test-video",
+  name: "ai-trading-mcp",
   version: "1.0.0",
-  capabilities: {
-    resources: {},
-    tools: {},
-    prompts: {},
-  },
-})
+});
 
-server.resource(
-  "users",
-  "users://all",
-  {
-    description: "Get all users data from the database",
-    title: "Users",
-    mimeType: "application/json",
-  },
-  async uri => {
-    const users = await import("./data/users.json", {
-      with: { type: "json" },
-    }).then(m => m.default)
+// 🔧 For now use a fixed account id (create one manually in Supabase or via tool)
+const TEST_ACCOUNT_ID = process.env.TEST_ACCOUNT_ID ?? "00000000-0000-0000-0000-000000000001";
 
-    return {
-      contents: [
-        {
-          uri: uri.href,
-          text: JSON.stringify(users),
-          mimeType: "application/json",
-        },
-      ],
-    }
-  }
-)
-
-server.resource(
-  "user-details",
-  new ResourceTemplate("users://{userId}/profile", { list: undefined }),
-  {
-    description: "Get a user's details from teh database",
-    title: "User Details",
-    mimeType: "application/json",
-  },
-  async (uri, { userId }) => {
-    const users = await import("./data/users.json", {
-      with: { type: "json" },
-    }).then(m => m.default)
-    const user = users.find(u => u.id === parseInt(userId as string))
-
-    if (user == null) {
-      return {
-        contents: [
-          {
-            uri: uri.href,
-            text: JSON.stringify({ error: "User not found" }),
-            mimeType: "application/json",
-          },
-        ],
-      }
-    }
-
-    return {
-      contents: [
-        {
-          uri: uri.href,
-          text: JSON.stringify(user),
-          mimeType: "application/json",
-        },
-      ],
-    }
-  }
-)
+// === MCP TOOLS ===
 
 server.tool(
   "create-user",
-  "Create a new user in the database",
+  "Create a user in Supabase",
   {
     name: z.string(),
-    email: z.string(),
-    address: z.string(),
-    phone: z.string(),
+    email: z.string().email(),
   },
-  {
-    title: "Create User",
-    readOnlyHint: false,
-    destructiveHint: false,
-    idempotentHint: false,
-    openWorldHint: true,
-  },
-  async params => {
-    try {
-      const id = await createUser(params)
+  {},
+  async ({ name, email }) => {
+    const { data, error } = await supabase
+      .from("users")
+      .insert([{ name, email }])
+      .select("id")
+      .maybeSingle();
 
+    if (error || !data) {
       return {
-        content: [{ type: "text", text: `User ${id} created successfully` }],
-      }
-    } catch {
-      return {
-        content: [{ type: "text", text: "Failed to save user" }],
-      }
-    }
-  }
-)
-
-server.tool(
-  "create-random-user",
-  "Create a random user with fake data",
-  {
-    title: "Create Random User",
-    readOnlyHint: false,
-    destructiveHint: false,
-    idempotentHint: false,
-    openWorldHint: true,
-  },
-  async () => {
-    const res = await server.server.request(
-      {
-        method: "sampling/createMessage",
-        params: {
-          messages: [
-            {
-              role: "user",
-              content: {
-                type: "text",
-                text: "Generate fake user data. The user should have a realistic name, email, address, and phone number. Return this data as a JSON object with no other text or formatter so it can be used with JSON.parse.",
-              },
-            },
-          ],
-          maxTokens: 1024,
-        },
-      },
-      CreateMessageResultSchema
-    )
-
-    if (res.content.type !== "text") {
-      return {
-        content: [{ type: "text", text: "Failed to generate user data" }],
-      }
-    }
-
-    try {
-      const fakeUser = JSON.parse(
-        res.content.text
-          .trim()
-          .replace(/^```json/, "")
-          .replace(/```$/, "")
-          .trim()
-      )
-
-      const id = await createUser(fakeUser)
-      return {
-        content: [{ type: "text", text: `User ${id} created successfully` }],
-      }
-    } catch {
-      return {
-        content: [{ type: "text", text: "Failed to generate user data" }],
-      }
-    }
-  }
-)
-
-server.prompt(
-  "generate-fake-user",
-  "Generate a fake user based on a given name",
-  {
-    name: z.string(),
-  },
-  ({ name }) => {
-    return {
-      messages: [
-        {
-          role: "user",
-          content: {
+        content: [
+          {
             type: "text",
-            text: `Generate a fake user with the name ${name}. The user should have a realistic email, address, and phone number.`,
+            text: `Error creating user: ${error?.message ?? "unknown"}`,
           },
+        ],
+      };
+    }
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: `User created with id: ${data.id}`,
         },
       ],
-    }
+    };
   }
-)
+);
 
-async function createUser(user: {
-  name: string
-  email: string
-  address: string
-  phone: string
-}) {
-  const users = await import("./data/users.json", {
-    with: { type: "json" },
-  }).then(m => m.default)
+server.tool(
+  "create-trading-account",
+  "Create a trading account",
+  {
+    userId: z.number(),
+    name: z.string(),
+    startingBalance: z.number().positive(),
+    maxLeverage: z.number().positive(),
+    maxRiskPerTrade: z.number().min(0).max(100),
+  },
+  {},
+  async params => {
+    const { userId, name, startingBalance, maxLeverage, maxRiskPerTrade } =
+      params;
 
-  const id = users.length + 1
+    const { data, error } = await supabase
+      .from("trading_accounts")
+      .insert([
+        {
+          user_id: userId,
+          name,
+          starting_balance: startingBalance,
+          current_balance: startingBalance,
+          max_leverage: maxLeverage,
+          max_risk_per_trade: maxRiskPerTrade,
+        },
+      ])
+      .select("id")
+      .maybeSingle();
 
-  users.push({ id, ...user })
+    if (error || !data) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Failed to create trading account: ${
+              error?.message ?? "Unknown"
+            }`,
+          },
+        ],
+      };
+    }
 
-  await fs.writeFile("./src/data/users.json", JSON.stringify(users, null, 2))
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Trading account created with id: ${data.id}`,
+        },
+      ],
+    };
+  }
+);
 
-  return id
+server.tool(
+  "list-trade-signals",
+  "List latest trade signals for an account",
+  {
+    accountId: z.string(),
+  },
+  {},
+  async ({ accountId }) => {
+    const { data, error } = await supabase
+      .from("trade_signals")
+      .select("*")
+      .eq("account_id", accountId)
+      .order("created_at", { ascending: false })
+      .limit(20);
+
+    if (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error listing trade_signals: ${error.message}`,
+          },
+        ],
+      };
+    }
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify(data ?? [], null, 2),
+        },
+      ],
+    };
+  }
+);
+
+server.tool(
+  "run-pipeline",
+  "Trigger a sequential pipeline run for one account + symbol + timeframe",
+  {
+    accountId: z.string(),
+    symbol: z.string().default("BTCUSDT"),
+    timeframe: z.string().default("1h"),
+  },
+  {},
+  async ({ accountId, symbol, timeframe }) => {
+    const runId = await runPipelineOnce(accountId, symbol, timeframe);
+
+    if (!runId) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: "Failed to start pipeline run",
+          },
+        ],
+      };
+    }
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Pipeline run started with id: ${runId}`,
+        },
+      ],
+    };
+  }
+);
+
+// === START AGENTS ===
+
+async function startAgents() {
+  const agents = [
+    new MarketStructureAgent(),
+    new OrderFlowAgent(),
+    new MomentumAgent(),
+    new VolatilityRegimeAgent(),
+    new NewsSentimentAgent(),
+    new MultiTimeframeAgent(),
+    new PatternRecognitionAgent(),
+    new StatisticalEdgeAgent(),
+    new RiskManagerAgent(TEST_ACCOUNT_ID),
+    new DecisionAgent(TEST_ACCOUNT_ID),
+  ];
+
+  for (const agent of agents) {
+    const originalRun = agent.run.bind(agent);
+
+    if (!agent.name.includes("decision")) {
+      agent.run = async (): Promise<AgentRunResult | void> => {
+        const result = await originalRun();
+        if (result) {
+          await recordAgentSignal(TEST_ACCOUNT_ID, result);
+        }
+        return result;
+      };
+    }
+
+    agent.start();
+  }
+
+  // Start ExecutionAgent (separate loop, reading from Redis queue)
+  const venue = (process.env.EXEC_VENUE as any) || "bybit"; // "bybit" | "binance-futures"
+  const execAgent = new ExecutionAgent(venue);
+  execAgent.start();
 }
+
 
 async function main() {
-  const transport = new StdioServerTransport()
-  await server.connect(transport)
+  await syncAgentRegistry();
+  
+  // Start HTTP server
+  await startHttpServer(4000);
+
+  // Start ExecutionAgent (always runs)
+  const venue = (process.env.EXEC_VENUE as any) || "bybit";
+  const execAgent = new ExecutionAgent(venue);
+  execAgent.start();
+
+  // Choose mode: interval-based agents OR pipeline mode
+  const mode = process.env.AGENT_MODE ?? "interval"; // "interval" | "pipeline"
+
+  if (mode === "pipeline") {
+    console.log("🔄 Running in PIPELINE mode");
+    console.log("   Use POST /pipeline/run to trigger runs");
+    console.log("   Or start the scheduler separately: node dist/pipeline/scheduler.js");
+  } else {
+    console.log("🔄 Running in INTERVAL mode (legacy)");
+    await startAgents();
+  }
+
+  // Only start MCP server if enabled (e.g., for local dev, not in Docker)
+  if (process.env.MCP_SERVER_ENABLED === "true") {
+    console.log("MCP server enabled, starting...");
+    const transport = new StdioServerTransport();
+    await server.connect(transport);
+    console.log("MCP server connected via stdio.");
+  } else {
+    console.log("MCP server disabled. Running agents and HTTP API only.");
+  }
 }
 
-main()
+main().catch(err => {
+  console.error("Fatal error", err);
+  process.exit(1);
+});
